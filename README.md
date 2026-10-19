@@ -11,9 +11,31 @@ already using.
   device unless you deliberately enable a cloud provider.
 - **Works everywhere.** Insertion happens through Android's accessibility layer,
   so it works in messaging apps, email, notes, browsers and editors.
-- **Sounds like you.** Tone profiles, per-app style, snippets, a personal
-  dictionary and voice commands.
+- **Sounds like you.** Tone profiles, per-app tone memory, snippets with
+  variables, a personal dictionary and voice commands.
+- **Works where you are.** A full-screen dictation pad with a live waveform,
+  plus the floating bubble for any other app.
 - **Open source.** Apache-2.0. Audit it, fork it, ship it.
+
+**Download:** [`sotto.apk`](https://github.com/desukab/sotto/releases/latest/download/sotto.apk)
+(1.1.0, arm64-v8a, Android 8+, 709 KB).
+
+## What's in 1.1.0
+
+- **Dictation pad** — tap “Open dictation pad” for a live transcript with a real
+  microphone waveform, then Insert / Copy / reshape to Formal, Casual or Notes.
+- **Verified insertion** — Sotto pastes, re-reads the field, and falls back to
+  `ACTION_SET_TEXT` if the app ignored the paste. Undo restores the exact
+  previous value.
+- **Per-app tone memory** — say “make it formal” in Gmail and it sticks, without
+  changing your global tone.
+- **Snippet variables** — `{date}`, `{time}`, `{day}`, `{datetime}`,
+  `{clipboard}`.
+- **Optional cloud polish** — bring your own OpenAI-compatible endpoint and key.
+  Off by default; only the transcript text is ever sent, never audio.
+- **Strict offline mode** — refuses to dictate instead of silently falling back
+  to a networked recognizer. See [`docs/OFFLINE-ASR.md`](docs/OFFLINE-ASR.md).
+- **Library transfer** — export and import snippets and dictionary as JSON.
 
 ## Why another dictation app?
 
@@ -82,6 +104,8 @@ what still needs a physical-device pass.
 - [`docs/WISPR-FLOW-DOSSIER.md`](docs/WISPR-FLOW-DOSSIER.md) — evidence-backed
   analysis of the reference product's architecture and behavior.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how Sotto is put together.
+- [`docs/OFFLINE-ASR.md`](docs/OFFLINE-ASR.md) — the offline recognizer path and
+  how to bundle a model.
 - [`docs/PRIVACY.md`](docs/PRIVACY.md) — data handling.
 - [`docs/AZURE.md`](docs/AZURE.md) — build and deployment plan.
 - [`docs/TESTING.md`](docs/TESTING.md) — verification log.

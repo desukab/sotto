@@ -60,14 +60,20 @@ public final class SottoAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        int type = event.getEventType();
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             CharSequence pkg = event.getPackageName();
             if (pkg != null) focusedPackage = pkg.toString();
         }
-        AccessibilityNodeInfo node = findEditable();
-        if (node != null) {
-            CharSequence pkg = node.getPackageName();
-            if (pkg != null) focusedPackage = pkg.toString();
+        // Only walk the tree on events that can change what "focused" means.
+        if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED
+                || type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            AccessibilityNodeInfo node = findEditable();
+            if (node != null) {
+                CharSequence pkg = node.getPackageName();
+                if (pkg != null) focusedPackage = pkg.toString();
+            }
         }
     }
 
@@ -100,7 +106,7 @@ public final class SottoAccessibilityService extends AccessibilityService {
     }
 
     private AccessibilityNodeInfo search(AccessibilityNodeInfo node, int depth) {
-        if (node == null || depth > 18) return null;
+        if (node == null || depth > 12) return null;
         if (isUsable(node)) return node;
         int count = node.getChildCount();
         for (int i = 0; i < count; i++) {
@@ -141,21 +147,58 @@ public final class SottoAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo node = findEditable();
         if (node == null) return false;
 
-        CharSequence before = nodeText(node);
-        lastBefore = before == null ? "" : before.toString();
-        lastSelStart = node.getTextSelectionStart();
-        lastSelEnd = node.getTextSelectionEnd();
-        lastWasInsertion = true;
+        final String before = nodeText(node).toString();
+        final int selStart = node.getTextSelectionStart();
+        final int selEnd = node.getTextSelectionEnd();
+        snapshot(before, selStart, selEnd);
 
-        if (Build.VERSION.SDK_INT >= 21 && node.isEditable()) {
-            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
-        }
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
 
         boolean pasted = tryPaste(node, text);
-        if (!pasted) {
-            pasted = trySetText(node, insertAt(lastBefore, text, lastSelStart, lastSelEnd));
+        if (pasted) {
+            lastWasInsertion = true;
+            verifyInsertion(text, before, selStart, selEnd);
+            return true;
         }
-        return pasted;
+        boolean set = trySetText(node, insertAt(before, text, selStart, selEnd));
+        lastWasInsertion = set;
+        return set;
+    }
+
+    private void snapshot(String before, int start, int end) {
+        lastBefore = before == null ? "" : before;
+        lastSelStart = start;
+        lastSelEnd = end;
+    }
+
+    /**
+     * A few apps accept ACTION_PASTE and then ignore it. Re-read the field and
+     * fall back to ACTION_SET_TEXT when nothing actually changed.
+     */
+    private void verifyInsertion(final String inserted, final String before,
+                                 final int selStart, final int selEnd) {
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                AccessibilityNodeInfo node = findEditable();
+                if (node == null) return;
+                String now = nodeText(node).toString();
+                if (now.equals(before)) {
+                    boolean ok = trySetText(node, insertAt(before, inserted, selStart, selEnd));
+                    if (ok) lastWasInsertion = true;
+                }
+            }
+        }, 340);
+    }
+
+    /** Replace the whole field, keeping the previous value for undo. */
+    public boolean replaceText(String value) {
+        AccessibilityNodeInfo node = findEditable();
+        if (node == null) return false;
+        snapshot(nodeText(node).toString(), node.getTextSelectionStart(), node.getTextSelectionEnd());
+        boolean ok = trySetText(node, value == null ? "" : value);
+        lastWasInsertion = ok;
+        return ok;
     }
 
     private boolean tryPaste(AccessibilityNodeInfo node, String text) {
@@ -214,9 +257,7 @@ public final class SottoAccessibilityService extends AccessibilityService {
     }
 
     public boolean clear() {
-        AccessibilityNodeInfo node = findEditable();
-        if (node == null) return false;
-        return trySetText(node, "");
+        return replaceText("");
     }
 
     public boolean selectAll() {

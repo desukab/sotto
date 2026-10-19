@@ -10,12 +10,15 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.Vibrator;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -29,20 +32,25 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import app.sotto.voice.core.AppStyles;
+import app.sotto.voice.core.CloudPolish;
 import app.sotto.voice.core.Engine;
 import app.sotto.voice.core.HistoryStore;
 import app.sotto.voice.core.MapStore;
 import app.sotto.voice.core.NativeCore;
 import app.sotto.voice.core.Settings;
+import app.sotto.voice.core.Variables;
 import app.sotto.voice.ui.BubbleView;
 import app.sotto.voice.ui.Ui;
+import app.sotto.voice.ui.WaveView;
 
 /**
- * Foreground service that owns the floating bubble and the recognizer.
+ * Foreground service that owns the floating bubble, the recognizer and the
+ * polish pipeline.
  */
 public final class SottoService extends Service {
 
@@ -53,6 +61,7 @@ public final class SottoService extends Service {
 
     private static final int NOTIFICATION_ID = 41;
     private static final String CHANNEL = "sotto";
+    private static final int MAX_WAVE = 48;
 
     public interface Listener {
         void onState(boolean listening, boolean running);
@@ -86,12 +95,15 @@ public final class SottoService extends Service {
     }
 
     private Settings settings;
+    private AppStyles appStyles;
     private WindowManager windowManager;
     private WindowManager.LayoutParams overlayParams;
     private FrameLayout overlayRoot;
     private BubbleView bubble;
+    private WaveView wave;
     private TextView partialView;
     private SpeechRecognizer recognizer;
+    private ExecutorService cloudExecutor;
     private boolean destroyed;
     private long touchDownAt;
     private float touchDownX;
@@ -115,6 +127,12 @@ public final class SottoService extends Service {
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             toast("No speech recognizer is installed");
+            return;
+        }
+        boolean onDevice = Build.VERSION.SDK_INT >= 31
+                && SpeechRecognizer.isOnDeviceRecognitionAvailable(this);
+        if (settings.isOffline() && !onDevice) {
+            toast("On-device speech is unavailable — turn off “On-device only”");
             return;
         }
         promoteToMicrophone();
@@ -168,8 +186,8 @@ public final class SottoService extends Service {
             }
             startForeground(NOTIFICATION_ID, buildNotification(), type);
         } catch (Throwable ignored) {
-            // Android may refuse to promote to a microphone service from the
-            // background; recognition still works while the app is visible.
+            // Android can refuse to promote to a microphone service from the
+            // background. Recognition still works while the app is visible.
         }
     }
 
@@ -189,12 +207,17 @@ public final class SottoService extends Service {
 
                 @Override
                 public void onBeginningOfSpeech() {
+                    if (partialView != null) {
+                        partialView.setText("Listening…");
+                        partialView.setVisibility(View.VISIBLE);
+                    }
                 }
 
                 @Override
                 public void onRmsChanged(float rmsdB) {
                     float level = Math.max(0f, Math.min(1f, (rmsdB + 2f) / 12f));
                     if (bubble != null) bubble.setLevel(level);
+                    if (wave != null) wave.push(level);
                     if (listener != null) listener.onLevel(level);
                 }
 
@@ -220,6 +243,10 @@ public final class SottoService extends Service {
                             }
                         }, 350);
                     } else {
+                        if (error == SpeechRecognizer.ERROR_NO_MATCH
+                                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                            toast("Didn't catch that");
+                        }
                         notifyState();
                     }
                 }
@@ -245,10 +272,7 @@ public final class SottoService extends Service {
                 public void onPartialResults(Bundle partialResults) {
                     String text = best(partialResults);
                     if (text.length() == 0) return;
-                    if (partialView != null) {
-                        partialView.setText(text);
-                        partialView.setVisibility(View.VISIBLE);
-                    }
+                    showPartial(text);
                     if (listener != null) listener.onPartial(text);
                 }
 
@@ -269,6 +293,21 @@ public final class SottoService extends Service {
         return s == null ? "" : s.trim();
     }
 
+    private void showPartial(String text) {
+        if (partialView == null) return;
+        partialView.setText(text);
+        partialView.setVisibility(View.VISIBLE);
+    }
+
+    private void hidePartialSoon(long delay) {
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (partialView != null && !listening) partialView.setVisibility(View.GONE);
+            }
+        }, delay);
+    }
+
     private void handleUtterance(String raw) {
         int ordinal = NativeCore.command(raw);
         Engine.Command command = Engine.Command.values()[
@@ -276,7 +315,7 @@ public final class SottoService extends Service {
         SottoAccessibilityService a11y = SottoAccessibilityService.get();
 
         if (command != Engine.Command.NONE) {
-            if (partialView != null) partialView.setVisibility(View.GONE);
+            hidePartialSoon(0);
             runCommand(command, raw);
             return;
         }
@@ -284,55 +323,117 @@ public final class SottoService extends Service {
         Map<String, String> snippets = MapStore.snippets(this).all();
         Map<String, String> dictionary = MapStore.dictionary(this).all();
         String pkg = a11y != null ? a11y.focusedPackage() : "";
-        String polished = NativeCore.process(raw, settings, pkg, snippets, dictionary);
+        final String styleKey = resolveStyle(pkg);
+
+        String polished = NativeCore.processRaw(raw, styleKey, pkg,
+                settings.isFillers(), settings.isSpokenPunctuation(),
+                settings.isCapitalize(), settings.isTrailingSpace(),
+                settings.isAdaptTone(), snippets, dictionary);
         if (polished == null) polished = raw;
         polished = polished.trim();
+        if (settings.isVariables()) polished = Variables.expand(this, polished);
+
+        final String local = polished;
+        if (settings.isCloud() && settings.getCloudKey() != null
+                && !settings.getCloudKey().trim().isEmpty() && isOnline()) {
+            showPartial("Polishing with cloud…");
+            if (cloudExecutor == null) cloudExecutor = Executors.newSingleThreadExecutor();
+            cloudExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    String result = null;
+                    String error = null;
+                    try {
+                        result = CloudPolish.polish(settings, local, styleKey);
+                    } catch (Throwable t) {
+                        error = t.getMessage();
+                    }
+                    final String ok = result;
+                    final String fail = error;
+                    handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (ok != null && !ok.isEmpty()) {
+                                deliver(ok, styleKey, false);
+                            } else {
+                                if (fail != null) toast("Cloud polish failed: " + fail);
+                                deliver(local, styleKey, false);
+                            }
+                        }
+                    });
+                }
+            });
+        } else {
+            deliver(local, styleKey, true);
+        }
+    }
+
+    /** Insert the finished text, record it and surface it to the UI. */
+    private void deliver(String text, String styleKey, boolean record) {
+        SottoAccessibilityService a11y = SottoAccessibilityService.get();
+        String pkg = a11y != null ? a11y.focusedPackage() : "";
+        String finalText = text == null ? "" : text.trim();
+        if (finalText.isEmpty()) return;
 
         boolean inserted = false;
         if (settings.isAutoInsert() && a11y != null) {
-            inserted = a11y.insert(polished);
+            inserted = a11y.insert(finalText);
         }
-        if (!inserted && a11y != null) {
-            a11y.toClipboard(polished);
-            toast("Copied to clipboard");
-        } else if (!inserted) {
-            toast("Text copied — enable Sotto accessibility to insert");
-            copyFallback(polished);
+        if (!inserted) {
+            if (a11y != null) a11y.toClipboard(finalText);
+            else copyFallback(finalText);
+            toast(hasA11y() ? "Copied to clipboard" : "Enable Sotto accessibility to insert");
         }
 
-        HistoryStore history = new HistoryStore(this);
-        history.add(polished, pkg, settings.getStyle(), NativeCore.countWords(polished));
-        settings.recordSession(NativeCore.countWords(polished));
+        if (record) {
+            new HistoryStore(this).add(finalText, pkg, styleKey,
+                    NativeCore.countWords(finalText));
+            settings.recordSession(NativeCore.countWords(finalText));
+        }
         if (settings.isHaptics()) {
             try {
-                android.os.Vibrator v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
                 if (v != null) v.vibrate(12);
             } catch (Throwable ignored) {
             }
         }
-        if (partialView != null) {
-            partialView.setText(polished);
-            partialView.setVisibility(View.VISIBLE);
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (partialView != null) partialView.setVisibility(View.GONE);
-                }
-            }, 2600);
+        showPartial(finalText);
+        hidePartialSoon(2600);
+        if (listener != null) listener.onFinal(finalText);
+    }
+
+    private boolean hasA11y() {
+        return SottoAccessibilityService.connected();
+    }
+
+    private boolean isOnline() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkInfo info = cm.getActiveNetworkInfo();
+            return info != null && info.isConnected();
+        } catch (Throwable t) {
+            return false;
         }
-        if (listener != null) listener.onFinal(polished);
+    }
+
+    private String resolveStyle(String pkg) {
+        String style = settings.getStyle();
+        if (style == null || style.isEmpty()) style = "default";
+        if (!"default".equals(style)) return style;
+        if (settings.isAdaptTone() && settings.isAppToneMemory()) {
+            String remembered = appStyles.styleFor(pkg);
+            if (remembered != null) return remembered;
+        }
+        return style;
     }
 
     private void runCommand(Engine.Command command, String raw) {
         SottoAccessibilityService a11y = SottoAccessibilityService.get();
         switch (command) {
             case UNDO:
-                if (a11y != null && a11y.undoLast()) {
-                    toast("Undone");
-                } else if (a11y != null) {
-                    a11y.toClipboard("");
-                    toast("Nothing to undo");
-                }
+                if (a11y != null && a11y.undoLast()) toast("Undone");
+                else toast("Nothing to undo");
                 break;
             case NEW_PARAGRAPH:
                 insertRaw(a11y, "\n\n");
@@ -341,7 +442,7 @@ public final class SottoService extends Service {
                 insertRaw(a11y, "\n");
                 break;
             case SEND:
-                if (a11y != null) a11y.send();
+                if (a11y != null && !a11y.send()) toast("Nothing to send");
                 break;
             case SELECT_ALL:
                 if (a11y != null) a11y.selectAll();
@@ -356,7 +457,7 @@ public final class SottoService extends Service {
                 if (a11y != null) a11y.paste();
                 break;
             case CLEAR:
-                if (a11y != null) a11y.clear();
+                if (a11y != null && a11y.clear()) toast("Cleared");
                 break;
             case STOP:
                 stopListening();
@@ -380,11 +481,14 @@ public final class SottoService extends Service {
     }
 
     private void insertRaw(SottoAccessibilityService a11y, String text) {
-        if (a11y != null) a11y.insert(text);
+        if (a11y != null && !a11y.insert(text)) toast("No text field found");
     }
 
     private void restyle(SottoAccessibilityService a11y, Engine.Style style) {
-        if (a11y == null) return;
+        if (a11y == null) {
+            toast("Enable Sotto accessibility first");
+            return;
+        }
         String current = a11y.currentText();
         if (current == null || current.trim().isEmpty()) {
             toast("Nothing to restyle");
@@ -396,9 +500,14 @@ public final class SottoService extends Service {
         cfg.autoCapitalize = true;
         cfg.adaptTone = false;
         Engine.Result result = Engine.process(current, style, "", cfg);
-        a11y.clear();
-        a11y.insert(result.text);
-        toast("Restyle: " + style.label);
+        if (!a11y.replaceText(result.text)) {
+            toast("Could not update the field");
+            return;
+        }
+        if (settings.isAppToneMemory()) {
+            appStyles.remember(a11y.focusedPackage(), style.key);
+        }
+        toast("Tone: " + style.label);
     }
 
     private void copyFallback(String text) {
@@ -445,6 +554,7 @@ public final class SottoService extends Service {
         super.onCreate();
         instance = this;
         settings = new Settings(this);
+        appStyles = new AppStyles(this);
         createChannel();
         try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -490,7 +600,12 @@ public final class SottoService extends Service {
         if (!running) {
             running = true;
             try {
-                startForeground(NOTIFICATION_ID, buildNotification());
+                if (Build.VERSION.SDK_INT >= 29) {
+                    startForeground(NOTIFICATION_ID, buildNotification(),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification());
+                }
             } catch (Throwable ignored) {
             }
         }
@@ -503,6 +618,10 @@ public final class SottoService extends Service {
         running = false;
         listening = false;
         handler.removeCallbacksAndMessages(null);
+        if (cloudExecutor != null) {
+            cloudExecutor.shutdownNow();
+            cloudExecutor = null;
+        }
         if (recognizer != null) {
             try {
                 recognizer.destroy();
@@ -535,15 +654,21 @@ public final class SottoService extends Service {
         LinearLayout column = Ui.column(this);
         column.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        partialView = Ui.text(this, "", 12, Ui.TEXT);
-        partialView.setMaxWidth(Ui.dpi(this, 250));
-        partialView.setMaxLines(3);
-        partialView.setPadding(Ui.dpi(this, 10), Ui.dpi(this, 7),
-                Ui.dpi(this, 10), Ui.dpi(this, 7));
-        partialView.setBackground(Ui.stroked(0xEE12161B, Ui.STROKE, 14, this));
+        partialView = Ui.text(this, "", 13, Ui.TEXT);
+        partialView.setMaxWidth(Ui.dpi(this, 280));
+        partialView.setMaxLines(4);
+        partialView.setPadding(Ui.dpi(this, 12), Ui.dpi(this, 9),
+                Ui.dpi(this, 12), Ui.dpi(this, 9));
+        partialView.setBackground(Ui.stroked(0xF212161B, Ui.STROKE, 16, this));
         partialView.setVisibility(View.GONE);
         column.addView(partialView);
-        column.addView(Ui.spacer(this, 6));
+
+        wave = new WaveView(this);
+        wave.setBarColor(Ui.ACCENT);
+        LinearLayout.LayoutParams waveLp = new LinearLayout.LayoutParams(
+                Ui.dpi(this, 96), Ui.dpi(this, 20));
+        waveLp.bottomMargin = Ui.dpi(this, 4);
+        column.addView(wave, waveLp);
 
         bubble = new BubbleView(this);
         bubble.setAlpha(Math.max(0.35f, Math.min(1f, settings.getBubbleOpacity() / 100f)));
@@ -632,6 +757,7 @@ public final class SottoService extends Service {
         }
         overlayRoot = null;
         bubble = null;
+        wave = null;
         partialView = null;
     }
 

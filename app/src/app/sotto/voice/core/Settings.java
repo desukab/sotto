@@ -30,6 +30,12 @@ public final class Settings {
     public static final String K_LANGUAGE = "language";
     public static final String K_ONBOARDED = "onboarded";
     public static final String K_BOOT = "start_on_boot";
+    public static final String K_APP_TONE = "app_tone";
+    public static final String K_VARIABLES = "variables";
+    public static final String K_CLOUD = "cloud";
+    public static final String K_CLOUD_BASE = "cloud_base";
+    public static final String K_CLOUD_KEY = "cloud_key";
+    public static final String K_CLOUD_MODEL = "cloud_model";
 
     public static final String K_WORDS = "stat_words";
     public static final String K_SESSIONS = "stat_sessions";
@@ -176,6 +182,54 @@ public final class Settings {
 
     public boolean isStartOnBoot() {
         return prefs.getBoolean(K_BOOT, false);
+    }
+
+    public boolean isAppToneMemory() {
+        return prefs.getBoolean(K_APP_TONE, true);
+    }
+
+    public void setAppToneMemory(boolean v) {
+        prefs.edit().putBoolean(K_APP_TONE, v).apply();
+    }
+
+    public boolean isVariables() {
+        return prefs.getBoolean(K_VARIABLES, true);
+    }
+
+    public void setVariables(boolean v) {
+        prefs.edit().putBoolean(K_VARIABLES, v).apply();
+    }
+
+    public boolean isCloud() {
+        return prefs.getBoolean(K_CLOUD, false);
+    }
+
+    public void setCloud(boolean v) {
+        prefs.edit().putBoolean(K_CLOUD, v).apply();
+    }
+
+    public String getCloudBase() {
+        return prefs.getString(K_CLOUD_BASE, "https://api.openai.com/v1");
+    }
+
+    public void setCloudBase(String v) {
+        prefs.edit().putString(K_CLOUD_BASE, v).apply();
+    }
+
+    public String getCloudKey() {
+        return prefs.getString(K_CLOUD_KEY, "");
+    }
+
+    public void setCloudKey(String v) {
+        prefs.edit().putString(K_CLOUD_KEY, v).apply();
+    }
+
+    public String getCloudModel() {
+        return prefs.getString(K_CLOUD_MODEL, "gpt-4o-mini");
+    }
+
+    public void setCloudModel(String v) {
+        prefs.edit().putString(K_CLOUD_MODEL, v).apply();
     }
 
     public void setStartOnBoot(boolean v) {

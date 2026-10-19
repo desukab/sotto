@@ -3,6 +3,7 @@ package app.sotto.voice;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -39,13 +40,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import app.sotto.voice.core.AppStyles;
+import app.sotto.voice.core.CloudPolish;
 import app.sotto.voice.core.Engine;
 import app.sotto.voice.core.HistoryStore;
 import app.sotto.voice.core.MapStore;
 import app.sotto.voice.core.NativeCore;
 import app.sotto.voice.core.Settings;
+import app.sotto.voice.core.Variables;
 import app.sotto.voice.ui.IconView;
 import app.sotto.voice.ui.OrbView;
+import app.sotto.voice.ui.WaveView;
 import app.sotto.voice.ui.Ui;
 
 public final class MainActivity extends Activity {
@@ -71,6 +76,18 @@ public final class MainActivity extends Activity {
     private EditText tryField;
     private SpeechRecognizer inline;
     private boolean inlineListening;
+
+    private TextView homeWordsValue;
+    private TextView homeSessionsValue;
+    private TextView homeSavedValue;
+    private LinearLayout recentWrap;
+    private LinearLayout appToneWrap;
+    private LinearLayout transferWrap;
+
+    private Dialog sheet;
+    private WaveView sheetWave;
+    private TextView sheetText;
+    private TextView sheetStatus;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -158,6 +175,9 @@ public final class MainActivity extends Activity {
         }
         content.addView(screen, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        screen.setAlpha(0f);
+        screen.setTranslationY(Ui.dp(this, 14));
+        screen.animate().alpha(1f).translationY(0f).setDuration(190).start();
         for (int i = 0; i < navItems.length; i++) {
             Ui.navSelected(navItems[i], i == index);
         }
@@ -263,20 +283,33 @@ public final class MainActivity extends Activity {
         tags.addView(Ui.pill(this, "NO ACCOUNT", Ui.VIOLET));
         card.addView(tags);
 
-        homePrimary = Ui.primary(this, listening ? "Stop dictating" : "Start dictating");
+        homePrimary = Ui.primary(this, "Open dictation pad");
         homePrimary.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openSheet();
+            }
+        });
+        card.addView(homePrimary, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        card.addView(Ui.spacer(this, 10));
+
+        TextView bubbleBtn = Ui.button(this,
+                listening ? "Stop floating bubble" : "Use floating bubble",
+                Ui.SURFACE2, Ui.TEXT, 14);
+        bubbleBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 startDictation();
             }
         });
-        card.addView(homePrimary, new LinearLayout.LayoutParams(
+        card.addView(bubbleBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         homeOrb.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                startDictation();
+                openSheet();
             }
         });
         return card;
@@ -350,24 +383,28 @@ public final class MainActivity extends Activity {
         wrap.addView(Ui.sectionLabel(this, "Your voice, so far"));
 
         LinearLayout row = Ui.row(this);
-        row.addView(statCard("words", String.valueOf(settings.getWords()), "dictated"));
+        LinearLayout words = statCard(String.valueOf(settings.getWords()), "dictated");
+        LinearLayout sessions = statCard(String.valueOf(settings.getSessions()), "sessions");
+        LinearLayout saved = statCard(Settings.formatSaved(
+                Settings.secondsSaved(settings.getWords())), "saved");
+        homeWordsValue = (TextView) words.getChildAt(0);
+        homeSessionsValue = (TextView) sessions.getChildAt(0);
+        homeSavedValue = (TextView) saved.getChildAt(0);
+        row.addView(words);
         row.addView(Ui.gap(this, 10));
-        row.addView(statCard("sessions", String.valueOf(settings.getSessions()), "sessions"));
+        row.addView(sessions);
         row.addView(Ui.gap(this, 10));
-        row.addView(statCard("time", Settings.formatSaved(
-                Settings.secondsSaved(settings.getWords())), "saved"));
+        row.addView(saved);
         wrap.addView(row);
         return wrap;
     }
 
-    private View statCard(String key, String value, String label) {
+    private LinearLayout statCard(String value, String label) {
         LinearLayout card = Ui.column(this);
         card.setPadding(Ui.dpi(this, 14), Ui.dpi(this, 14), Ui.dpi(this, 14), Ui.dpi(this, 14));
         card.setBackground(Ui.stroked(Ui.SURFACE, Ui.STROKE, 16, this));
-        TextView v = Ui.bold(this, value, 19, Ui.ACCENT);
-        TextView l = Ui.text(this, label, 10, Ui.MUTED);
-        card.addView(v);
-        card.addView(l);
+        card.addView(Ui.bold(this, value, 19, Ui.ACCENT));
+        card.addView(Ui.text(this, label, 10, Ui.MUTED));
         return card;
     }
 
@@ -478,18 +515,35 @@ public final class MainActivity extends Activity {
         });
         head.addView(all);
         wrap.addView(head);
+        recentWrap = Ui.column(this);
+        wrap.addView(recentWrap);
+        fillRecent();
+        return wrap;
+    }
 
+    private void fillRecent() {
+        if (recentWrap == null) return;
+        recentWrap.removeAllViews();
         List<HistoryStore.Entry> entries = history.all();
         if (entries.isEmpty()) {
-            wrap.addView(emptyCard("Nothing yet.", "Your last dictations will appear here."));
-            return wrap;
+            recentWrap.addView(emptyCard("Nothing yet.", "Your last dictations will appear here."));
+            return;
         }
         int count = Math.min(3, entries.size());
         for (int i = 0; i < count; i++) {
-            wrap.addView(historyCard(entries.get(i), i, true));
-            wrap.addView(Ui.spacer(this, 8));
+            recentWrap.addView(historyCard(entries.get(i), i, true));
+            recentWrap.addView(Ui.spacer(this, 8));
         }
-        return wrap;
+    }
+
+    private void refreshStats() {
+        if (homeWordsValue != null) homeWordsValue.setText(String.valueOf(settings.getWords()));
+        if (homeSessionsValue != null) homeSessionsValue.setText(String.valueOf(settings.getSessions()));
+        if (homeSavedValue != null) {
+            homeSavedValue.setText(Settings.formatSaved(
+                    Settings.secondsSaved(settings.getWords())));
+        }
+        fillRecent();
     }
 
     // ------------------------------------------------------------ onboarding
@@ -794,8 +848,8 @@ public final class MainActivity extends Activity {
 
         body.addView(Ui.sectionLabel(this, "Dictation"));
         LinearLayout dictation = Ui.card(this);
-        dictation.addView(switchRow("On-device only",
-                "Prefer the offline recognizer when the device has one",
+        dictation.addView(switchRow("On-device only (strict)",
+                "Refuse to dictate when the device has no offline model",
                 settings.isOffline(), new CompoundButton.OnCheckedChangeListener() {
                     @Override
                     public void onCheckedChanged(CompoundButton b, boolean v) {
@@ -870,6 +924,15 @@ public final class MainActivity extends Activity {
                         settings.setTrailingSpace(v);
                     }
                 }));
+        polish.addView(Ui.divider(this));
+        polish.addView(switchRow("Snippet variables",
+                "{date}  {time}  {day}  {datetime}  {clipboard}",
+                settings.isVariables(), new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton b, boolean v) {
+                        settings.setVariables(v);
+                    }
+                }));
         body.addView(polish);
 
         body.addView(Ui.spacer(this, 18));
@@ -941,6 +1004,141 @@ public final class MainActivity extends Activity {
         });
         langCard.addView(save);
         body.addView(langCard);
+
+        body.addView(Ui.spacer(this, 18));
+        body.addView(Ui.sectionLabel(this, "Recognizer"));
+        LinearLayout rec = Ui.card(this);
+        boolean onDevice = Build.VERSION.SDK_INT >= 31
+                && SpeechRecognizer.isOnDeviceRecognitionAvailable(this);
+        boolean available = SpeechRecognizer.isRecognitionAvailable(this);
+        rec.addView(aboutRow("Speech engine", available ? "Installed" : "Missing"));
+        rec.addView(Ui.divider(this));
+        rec.addView(aboutRow("On-device model", onDevice ? "Available" : "Not available"));
+        rec.addView(Ui.divider(this));
+        rec.addView(aboutRow("Languages", "From the device recognizer"));
+        rec.addView(Ui.spacer(this, 8));
+        TextView speech = Ui.button(this, "Open system speech settings", Ui.SURFACE2, Ui.TEXT, 12);
+        speech.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    startActivity(new Intent("android.settings.VOICE_INPUT_SETTINGS"));
+                } catch (Throwable t) {
+                    toast("No speech settings on this device");
+                }
+            }
+        });
+        rec.addView(speech);
+        TextView recHint = Ui.text(this,
+                "Sotto never bundles an ASR model. It uses the recognizer your device already "
+                        + "has, which is the only way to keep the app small and install-free.",
+                11, Ui.MUTED);
+        recHint.setPadding(0, Ui.dpi(this, 10), 0, 0);
+        rec.addView(recHint);
+        body.addView(rec);
+
+        body.addView(Ui.spacer(this, 18));
+        body.addView(Ui.sectionLabel(this, "App tone"));
+        LinearLayout toneCard = Ui.card(this);
+        toneCard.addView(switchRow("Remember tone per app",
+                "Say “make it formal” inside Gmail and it sticks",
+                settings.isAppToneMemory(), new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton b, boolean v) {
+                        settings.setAppToneMemory(v);
+                    }
+                }));
+        toneCard.addView(Ui.divider(this));
+        toneCard.addView(Ui.spacer(this, 8));
+        appToneWrap = Ui.column(this);
+        toneCard.addView(appToneWrap);
+        body.addView(toneCard);
+        fillAppTones();
+
+        body.addView(Ui.spacer(this, 18));
+        body.addView(Ui.sectionLabel(this, "Cloud polish · optional"));
+        LinearLayout cloud = Ui.card(this);
+        cloud.addView(switchRow("Send polished text to a cloud model",
+                "Off by default. Only the transcript text is sent, never audio.",
+                settings.isCloud(), new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton b, boolean v) {
+                        settings.setCloud(v);
+                    }
+                }));
+        cloud.addView(Ui.divider(this));
+        cloud.addView(label("Endpoint (OpenAI-compatible)"));
+        final EditText base = libField("https://api.openai.com/v1");
+        base.setText(settings.getCloudBase());
+        cloud.addView(base);
+        cloud.addView(label("Model"));
+        final EditText model = libField("gpt-4o-mini");
+        model.setText(settings.getCloudModel());
+        cloud.addView(model);
+        cloud.addView(label("API key"));
+        final EditText keyField = libField("sk-…");
+        keyField.setText(settings.getCloudKey());
+        keyField.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        cloud.addView(keyField);
+        cloud.addView(Ui.spacer(this, 10));
+        LinearLayout cloudActions = Ui.row(this);
+        TextView cloudSave = Ui.button(this, "Save", Ui.ACCENT, 0xFF07120A, 12);
+        cloudSave.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                settings.setCloudBase(base.getText().toString().trim());
+                settings.setCloudModel(model.getText().toString().trim());
+                settings.setCloudKey(keyField.getText().toString().trim());
+                toast("Cloud settings saved");
+            }
+        });
+        TextView cloudTest = Ui.button(this, "Test", Ui.SURFACE2, Ui.TEXT, 12);
+        cloudTest.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                settings.setCloudBase(base.getText().toString().trim());
+                settings.setCloudModel(model.getText().toString().trim());
+                settings.setCloudKey(keyField.getText().toString().trim());
+                testCloud();
+            }
+        });
+        cloudActions.addView(cloudSave);
+        cloudActions.addView(Ui.gap(this, 8));
+        cloudActions.addView(cloudTest);
+        cloud.addView(cloudActions);
+        body.addView(cloud);
+
+        body.addView(Ui.spacer(this, 18));
+        body.addView(Ui.sectionLabel(this, "Transfer"));
+        LinearLayout transfer = Ui.card(this);
+        transfer.addView(Ui.text(this,
+                "Move snippets and dictionary between devices as JSON.",
+                11, Ui.MUTED));
+        transfer.addView(Ui.spacer(this, 10));
+        LinearLayout transferActions = Ui.row(this);
+        TextView exportBtn = Ui.button(this, "Export", Ui.SURFACE2, Ui.TEXT, 12);
+        exportBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                exportLibrary();
+            }
+        });
+        TextView importBtn = Ui.button(this, "Import", Ui.SURFACE2, Ui.TEXT, 12);
+        importBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                importLibrary();
+            }
+        });
+        transferActions.addView(exportBtn);
+        transferActions.addView(Ui.gap(this, 8));
+        transferActions.addView(importBtn);
+        transfer.addView(transferActions);
+        transferWrap = Ui.column(this);
+        transfer.addView(transferWrap);
+        updateTransferHint();
+        body.addView(transfer);
 
         body.addView(Ui.spacer(this, 18));
         body.addView(Ui.sectionLabel(this, "Data"));
@@ -1036,6 +1234,402 @@ public final class MainActivity extends Activity {
         s.setPadding(0, Ui.dpi(this, 5), 0, 0);
         card.addView(s);
         return card;
+    }
+
+    // ---------------------------------------------------------------- sheet
+
+    private TextView label(String text) {
+        TextView t = Ui.sectionLabel(this, text);
+        t.setPadding(0, Ui.dpi(this, 10), 0, Ui.dpi(this, 4));
+        return t;
+    }
+
+    private void openSheet() {
+        if (sheet != null && sheet.isShowing()) return;
+        if (!hasMic()) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+            return;
+        }
+        SottoService service = SottoService.get();
+        if (service != null && SottoService.isListening()) service.stopListening();
+
+        sheet = new Dialog(this, android.R.style.Theme_Translucent_NoTitleBar);
+        Window w = sheet.getWindow();
+        if (w != null) {
+            w.setGravity(Gravity.BOTTOM);
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0x00000000));
+            w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams attrs = w.getAttributes();
+            attrs.dimAmount = 0.6f;
+            w.setAttributes(attrs);
+        }
+
+        LinearLayout panel = Ui.column(this);
+        panel.setPadding(Ui.dpi(this, 20), Ui.dpi(this, 14),
+                Ui.dpi(this, 20), Ui.dpi(this, 26));
+        android.graphics.drawable.GradientDrawable bg =
+                Ui.gradient(0xFF161B21, 0xFF0B0E11, 0, this);
+        float corner = Ui.dp(this, 28);
+        bg.setCornerRadii(new float[]{corner, corner, corner, corner, 0, 0, 0, 0});
+        panel.setBackground(bg);
+
+        View handle = new View(this);
+        handle.setBackground(Ui.round(0xFF3A424C, 999, this));
+        LinearLayout.LayoutParams handleLp = new LinearLayout.LayoutParams(
+                Ui.dpi(this, 42), Ui.dpi(this, 4));
+        handleLp.gravity = Gravity.CENTER_HORIZONTAL;
+        handleLp.bottomMargin = Ui.dpi(this, 16);
+        panel.addView(handle, handleLp);
+
+        LinearLayout titleRow = Ui.row(this);
+        titleRow.addView(Ui.bold(this, "Dictation", 18, Ui.TEXT), new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        sheetStatus = Ui.pill(this, "LISTENING", Ui.ACCENT);
+        titleRow.addView(sheetStatus);
+        panel.addView(titleRow);
+        panel.addView(Ui.spacer(this, 12));
+
+        sheetWave = new WaveView(this);
+        sheetWave.setBarColor(Ui.ACCENT);
+        panel.addView(sheetWave, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dpi(this, 56)));
+        panel.addView(Ui.spacer(this, 14));
+
+        sheetText = Ui.text(this, "Start speaking…", 18, Ui.TEXT);
+        sheetText.setMinLines(3);
+        sheetText.setMaxLines(9);
+        sheetText.setLineSpacing(Ui.dp(this, 4), 1f);
+        panel.addView(sheetText);
+        panel.addView(Ui.spacer(this, 16));
+
+        LinearLayout actions = Ui.row(this);
+        TextView stop = Ui.button(this, "Stop", Ui.SURFACE2, Ui.TEXT, 12);
+        stop.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                stopInline();
+            }
+        });
+        TextView copy = Ui.button(this, "Copy", Ui.SURFACE2, Ui.TEXT, 12);
+        copy.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (sheetText != null) copyText(sheetText.getText().toString());
+            }
+        });
+        TextView insert = Ui.button(this, "Insert", Ui.SURFACE2, Ui.TEXT, 12);
+        insert.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                insertFromSheet();
+            }
+        });
+        TextView done = Ui.primary(this, "Done");
+        done.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sheet.dismiss();
+            }
+        });
+        actions.addView(stop);
+        actions.addView(Ui.gap(this, 8));
+        actions.addView(copy);
+        actions.addView(Ui.gap(this, 8));
+        actions.addView(insert);
+        actions.addView(Ui.gap(this, 8));
+        actions.addView(done, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panel.addView(actions);
+
+        panel.addView(Ui.spacer(this, 12));
+        LinearLayout tones = Ui.row(this);
+        String[] labels = {"Formal", "Casual", "Notes"};
+        final String[] keys = {"formal", "casual", "notes"};
+        for (int i = 0; i < labels.length; i++) {
+            final String key = keys[i];
+            TextView chip = Ui.chip(this, labels[i]);
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    reshapeSheet(key);
+                }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = Ui.dpi(this, 8);
+            tones.addView(chip, lp);
+        }
+        TextView undo = Ui.chip(this, "Undo insert");
+        undo.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                SottoAccessibilityService a11y = SottoAccessibilityService.get();
+                if (a11y != null && a11y.undoLast()) toast("Undone");
+            }
+        });
+        tones.addView(undo);
+        panel.addView(tones);
+
+        sheet.setContentView(panel);
+        sheet.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(DialogInterface dialog) {
+                stopInline();
+                sheetWave = null;
+                sheetText = null;
+                sheetStatus = null;
+                sheet = null;
+            }
+        });
+        sheet.show();
+        startInlineIntoSheet();
+    }
+
+    private void startInlineIntoSheet() {
+        if (inline != null) {
+            try {
+                inline.destroy();
+            } catch (Throwable ignored) {
+            }
+        }
+        inline = SpeechRecognizer.createSpeechRecognizer(this);
+        inlineListening = true;
+        inline.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onReadyForSpeech(Bundle params) {
+            }
+
+            @Override
+            public void onBeginningOfSpeech() {
+            }
+
+            @Override
+            public void onRmsChanged(float rmsdB) {
+                if (sheetWave != null) {
+                    sheetWave.push(Math.max(0f, Math.min(1f, (rmsdB + 2f) / 12f)));
+                }
+            }
+
+            @Override
+            public void onBufferReceived(byte[] buffer) {
+            }
+
+            @Override
+            public void onEndOfSpeech() {
+            }
+
+            @Override
+            public void onError(int error) {
+                inlineListening = false;
+                if (sheetStatus != null) sheetStatus.setText("PAUSED");
+            }
+
+            @Override
+            public void onResults(Bundle results) {
+                inlineListening = false;
+                ArrayList<String> list =
+                        results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (list == null || list.isEmpty()) return;
+                String raw = list.get(0);
+                String styleKey = resolveStyleKey();
+                String polished = NativeCore.processRaw(raw, styleKey, getPackageName(),
+                        settings.isFillers(), settings.isSpokenPunctuation(),
+                        settings.isCapitalize(), false, settings.isAdaptTone(),
+                        snippets.all(), dictionary.all());
+                if (polished == null) polished = raw;
+                polished = polished.trim();
+                if (settings.isVariables()) polished = Variables.expand(MainActivity.this, polished);
+                if (sheetText != null) sheetText.setText(polished);
+                if (sheetStatus != null) sheetStatus.setText("READY");
+                history.add(polished, getPackageName(), styleKey,
+                        NativeCore.countWords(polished));
+                settings.recordSession(NativeCore.countWords(polished));
+            }
+
+            @Override
+            public void onPartialResults(Bundle partialResults) {
+                ArrayList<String> list =
+                        partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (list == null || list.isEmpty()) return;
+                if (sheetText != null) sheetText.setText(list.get(0));
+            }
+
+            @Override
+            public void onEvent(int eventType, Bundle params) {
+            }
+        });
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        if (settings.isOffline()) intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+        if (settings.getLanguage() != null && settings.getLanguage().length() > 0) {
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, settings.getLanguage());
+        }
+        inline.startListening(intent);
+    }
+
+    private void stopInline() {
+        inlineListening = false;
+        if (inline != null) {
+            try {
+                inline.stopListening();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (sheetWave != null) sheetWave.setActive(false);
+    }
+
+    private void insertFromSheet() {
+        if (sheetText == null) return;
+        String text = sheetText.getText().toString().trim();
+        if (text.isEmpty()) {
+            toast("Nothing to insert");
+            return;
+        }
+        SottoAccessibilityService a11y = SottoAccessibilityService.get();
+        if (a11y != null && a11y.insert(text)) {
+            toast("Inserted");
+        } else {
+            copyText(text);
+        }
+    }
+
+    private void reshapeSheet(String styleKey) {
+        if (sheetText == null) return;
+        String current = sheetText.getText().toString().trim();
+        if (current.isEmpty()) return;
+        Engine.Config cfg = new Engine.Config();
+        cfg.removeFillers = false;
+        cfg.spokenPunctuation = false;
+        cfg.autoCapitalize = true;
+        cfg.adaptTone = false;
+        Engine.Result result = Engine.process(current, Engine.Style.fromKey(styleKey), "", cfg);
+        sheetText.setText(result.text);
+        if (sheetStatus != null) sheetStatus.setText(styleKey.toUpperCase(Locale.US));
+    }
+
+    private String resolveStyleKey() {
+        String style = settings.getStyle();
+        if (style == null || style.isEmpty()) style = "default";
+        if (!"default".equals(style)) return style;
+        if (settings.isAdaptTone() && settings.isAppToneMemory()) {
+            String remembered = new AppStyles(this).styleFor(
+                    SottoAccessibilityService.connected()
+                            ? SottoAccessibilityService.get().focusedPackage() : "");
+            if (remembered != null) return remembered;
+        }
+        return style;
+    }
+
+    private void fillAppTones() {
+        if (appToneWrap == null) return;
+        appToneWrap.removeAllViews();
+        final AppStyles styles = new AppStyles(this);
+        Map<String, String> all = styles.all();
+        if (all.isEmpty()) {
+            appToneWrap.addView(Ui.text(this,
+                    "Nothing memorised yet. Say “make it formal” inside an app to teach Sotto.",
+                    11, Ui.MUTED));
+            return;
+        }
+        for (Map.Entry<String, String> e : all.entrySet()) {
+            final String pkg = e.getKey();
+            LinearLayout row = Ui.row(this);
+            row.setPadding(0, Ui.dpi(this, 8), 0, Ui.dpi(this, 8));
+            LinearLayout texts = Ui.column(this);
+            texts.addView(Ui.bold(this, AppStyles.label(pkg), 13, Ui.TEXT));
+            TextView sub = Ui.text(this, AppStyles.prettyStyle(e.getValue()), 11, Ui.MUTED);
+            sub.setPadding(0, Ui.dpi(this, 2), 0, 0);
+            texts.addView(sub);
+            row.addView(texts, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView forget = Ui.bold(this, "Forget", 11, Ui.MUTED);
+            forget.setPadding(Ui.dpi(this, 8), Ui.dpi(this, 4), 0, Ui.dpi(this, 4));
+            forget.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    new AppStyles(MainActivity.this).forget(pkg);
+                    fillAppTones();
+                }
+            });
+            row.addView(forget);
+            appToneWrap.addView(row);
+        }
+    }
+
+    private void testCloud() {
+        final Settings snapshot = settings;
+        if (snapshot.getCloudKey() == null || snapshot.getCloudKey().trim().isEmpty()) {
+            toast("Add an API key first");
+            return;
+        }
+        toast("Testing cloud endpoint…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String message;
+                try {
+                    String result = CloudPolish.polish(snapshot,
+                            "hello comma this is a test of the cloud polish period",
+                            "default");
+                    message = "OK: " + result;
+                } catch (Throwable t) {
+                    message = "Failed: " + t.getMessage();
+                }
+                final String text = message;
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        toast(text.length() > 160 ? text.substring(0, 160) : text);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void exportLibrary() {
+        try {
+            org.json.JSONObject bundle = new org.json.JSONObject();
+            bundle.put("snippets", snippets.exportJson());
+            bundle.put("dictionary", dictionary.exportJson());
+            copyText(bundle.toString());
+            toast("Library JSON copied");
+        } catch (Throwable t) {
+            toast("Export failed");
+        }
+    }
+
+    private void importLibrary() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip() || cm.getPrimaryClip() == null
+                    || cm.getPrimaryClip().getItemCount() == 0) {
+                toast("Clipboard is empty");
+                return;
+            }
+            CharSequence raw = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+            if (raw == null) {
+                toast("Clipboard is empty");
+                return;
+            }
+            org.json.JSONObject bundle = new org.json.JSONObject(raw.toString().trim());
+            int a = snippets.importJson(bundle.optString("snippets", "{}"));
+            int b = dictionary.importJson(bundle.optString("dictionary", "{}"));
+            toast("Imported " + (a + b) + " entries");
+            showTab(3);
+        } catch (Throwable t) {
+            toast("Could not read that JSON");
+        }
+    }
+
+    private void updateTransferHint() {
+        if (transferWrap == null) return;
+        transferWrap.removeAllViews();
+        transferWrap.addView(Ui.text(this,
+                snippets.all().size() + " snippets · " + dictionary.all().size() + " dictionary entries",
+                11, Ui.MUTED));
     }
 
     // ---------------------------------------------------------------- actions
@@ -1262,15 +1856,26 @@ public final class MainActivity extends Activity {
             @Override
             public void onState(boolean listening, boolean running) {
                 refreshHomeState();
+                if (sheetStatus != null) {
+                    sheetStatus.setText(listening ? "Listening…" : "Ready");
+                }
+                if (sheetWave != null) sheetWave.setActive(listening);
             }
 
             @Override
             public void onPartial(String text) {
+                if (sheetText != null && sheet != null && sheet.isShowing()) {
+                    sheetText.setText(text);
+                }
             }
 
             @Override
             public void onFinal(String text) {
-                if (tab == 0) showTab(0);
+                if (tab == 0) refreshStats();
+                if (sheetText != null && sheet != null && sheet.isShowing()) {
+                    sheetText.setText(text);
+                    if (sheetStatus != null) sheetStatus.setText("Inserted");
+                }
             }
 
             @Override

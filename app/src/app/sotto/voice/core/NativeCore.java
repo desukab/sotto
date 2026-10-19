@@ -63,17 +63,33 @@ public final class NativeCore {
     public static String process(String text, Settings settings, String pkg,
                                  Map<String, String> snippets,
                                  Map<String, String> dictionary) {
+        return processRaw(text, settings.getStyle(), pkg,
+                settings.isFillers(), settings.isSpokenPunctuation(),
+                settings.isCapitalize(), settings.isTrailingSpace(),
+                settings.isAdaptTone(), snippets, dictionary);
+    }
+
+    /**
+     * Same pipeline with an explicit style key, used when the per-app tone
+     * memory has already chosen a style.
+     */
+    public static String processRaw(String text, String styleKey, String pkg,
+                                    boolean removeFillers, boolean spokenPunctuation,
+                                    boolean autoCapitalize, boolean trailingSpace,
+                                    boolean adaptTone,
+                                    Map<String, String> snippets,
+                                    Map<String, String> dictionary) {
         if (LOADED) {
             try {
                 return nativeProcess(
                         text,
-                        settings.getStyle(),
+                        styleKey == null ? "default" : styleKey,
                         pkg == null ? "" : pkg,
-                        settings.isFillers(),
-                        settings.isSpokenPunctuation(),
-                        settings.isCapitalize(),
-                        settings.isTrailingSpace(),
-                        settings.isAdaptTone(),
+                        removeFillers,
+                        spokenPunctuation,
+                        autoCapitalize,
+                        trailingSpace,
+                        adaptTone,
                         encode(snippets),
                         encode(dictionary));
             } catch (Throwable ignored) {
@@ -81,12 +97,12 @@ public final class NativeCore {
             }
         }
         Engine.Config cfg = new Engine.Config();
-        cfg.removeFillers = settings.isFillers();
-        cfg.spokenPunctuation = settings.isSpokenPunctuation();
-        cfg.autoCapitalize = settings.isCapitalize();
-        cfg.trailingSpace = settings.isTrailingSpace();
-        cfg.adaptTone = settings.isAdaptTone();
-        Engine.Style style = Engine.Style.fromKey(settings.getStyle());
+        cfg.removeFillers = removeFillers;
+        cfg.spokenPunctuation = spokenPunctuation;
+        cfg.autoCapitalize = autoCapitalize;
+        cfg.trailingSpace = trailingSpace;
+        cfg.adaptTone = adaptTone;
+        Engine.Style style = Engine.Style.fromKey(styleKey);
         Engine.Result result = Engine.process(text, style, pkg, cfg);
         return result.text;
     }

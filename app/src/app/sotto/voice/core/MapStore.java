@@ -87,6 +87,40 @@ public final class MapStore {
         save(new LinkedHashMap<String, String>());
     }
 
+    /** Serialise the whole store so it can be shared or backed up. */
+    public synchronized String exportJson() {
+        JSONObject o = new JSONObject();
+        try {
+            for (Map.Entry<String, String> e : all().entrySet()) {
+                o.put(e.getKey(), e.getValue());
+            }
+        } catch (Exception ignored) {
+        }
+        return o.toString();
+    }
+
+    /** Merge a previously exported document. Returns the number of new keys. */
+    public synchronized int importJson(String json) {
+        if (json == null || json.trim().isEmpty()) return 0;
+        Map<String, String> map = all();
+        int added = 0;
+        try {
+            JSONObject o = new JSONObject(json.trim());
+            Iterator<String> it = o.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                String v = o.optString(k, "");
+                if (k.trim().isEmpty()) continue;
+                if (!map.containsKey(k)) added++;
+                map.put(k.trim(), v);
+            }
+        } catch (Exception ignored) {
+            return 0;
+        }
+        save(map);
+        return added;
+    }
+
     private void save(Map<String, String> map) {
         JSONObject o = new JSONObject();
         try {

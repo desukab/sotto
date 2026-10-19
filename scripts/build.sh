@@ -13,8 +13,8 @@ ANDROID_JAR="${ANDROID_JAR:-/data/data/com.termux/files/home/asdk/android-35/and
 TARGET="${TARGET:-aarch64-linux-android}"
 MIN_SDK="${MIN_SDK:-26}"
 TARGET_SDK="${TARGET_SDK:-35}"
-VERSION_NAME="${VERSION_NAME:-1.0.0}"
-VERSION_CODE="${VERSION_CODE:-1}"
+VERSION_NAME="${VERSION_NAME:-1.1.0}"
+VERSION_CODE="${VERSION_CODE:-2}"
 
 case "$TARGET" in
   aarch64-linux-android) ABI="arm64-v8a" ;;
