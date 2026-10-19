@@ -8,6 +8,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
 import android.os.Build;
 import android.os.Bundle;
@@ -116,6 +117,7 @@ public final class SottoService extends Service {
             toast("No speech recognizer is installed");
             return;
         }
+        promoteToMicrophone();
         ensureRecognizer();
         if (recognizer == null) {
             toast("Could not start the recognizer");
@@ -155,6 +157,20 @@ public final class SottoService extends Service {
         }
         applyListeningUi();
         notifyState();
+    }
+
+    private void promoteToMicrophone() {
+        if (Build.VERSION.SDK_INT < 29) return;
+        try {
+            int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            if (Build.VERSION.SDK_INT >= 34) {
+                type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+            }
+            startForeground(NOTIFICATION_ID, buildNotification(), type);
+        } catch (Throwable ignored) {
+            // Android may refuse to promote to a microphone service from the
+            // background; recognition still works while the app is visible.
+        }
     }
 
     private void ensureRecognizer() {
@@ -430,7 +446,15 @@ public final class SottoService extends Service {
         instance = this;
         settings = new Settings(this);
         createChannel();
-        startForeground(NOTIFICATION_ID, buildNotification());
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTIFICATION_ID, buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification());
+            }
+        } catch (Throwable ignored) {
+        }
         running = true;
         if (settings.isBubble()) {
             handler.post(new Runnable() {
@@ -465,7 +489,10 @@ public final class SottoService extends Service {
         }
         if (!running) {
             running = true;
-            startForeground(NOTIFICATION_ID, buildNotification());
+            try {
+                startForeground(NOTIFICATION_ID, buildNotification());
+            } catch (Throwable ignored) {
+            }
         }
         return START_STICKY;
     }
