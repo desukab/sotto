@@ -1,0 +1,25 @@
+[package]
+name = "sotto_core"
+version = "1.0.0"
+edition = "2021"
+description = "Sotto's on-device writing brain"
+license = "Apache-2.0"
+
+[lib]
+name = "sotto"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = { version = "0.21", default-features = false, optional = true }
+regex = "1"
+
+[features]
+default = ["jni-bridge"]
+jni-bridge = ["dep:jni"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

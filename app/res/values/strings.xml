@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sotto</string>
+    <string name="accessibility_label">Sotto text insertion</string>
+    <string name="accessibility_summary">Lets Sotto place your dictation into the text field you are using.</string>
+    <string name="accessibility_description">Sotto uses this service to read the text field you are focused on and to insert your dictation. Sotto never reads passwords, and it does not store screen content. Everything stays on your device.</string>
+    <string name="notif_channel">Sotto</string>
+    <string name="notif_channel_desc">Floating dictation bubble and session status.</string>
+</resources>

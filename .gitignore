@@ -1,0 +1,12 @@
+build/
+core/target/
+*.keystore
+*.jks
+*.apk
+!sotto.apk
+local.properties
+.idea/
+.gradle/
+.gradle-cache/
+*.iml
+.DS_Store

@@ -1,0 +1,46 @@
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_JAR: /usr/local/lib/android/sdk/platforms/android-35/android.jar
+  NDK_VERSION: 27.0.12077973
+  CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: '17'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -e
+      yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+      "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+        "platforms;android-35" "build-tools;30.0.3" "ndk;$(NDK_VERSION)"
+    displayName: Install Android SDK packages
+
+  - script: |
+      set -e
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+      source "$HOME/.cargo/env"
+      rustup target add aarch64-linux-android
+      cargo test --manifest-path core/Cargo.toml
+    displayName: Test Rust core
+
+  - script: |
+      set -e
+      source "$HOME/.cargo/env"
+      chmod +x scripts/build.sh
+      ./scripts/build.sh
+    displayName: Build signed APK
+
+  - publish: $(System.DefaultWorkingDirectory)/sotto.apk
+    artifact: sotto-apk
+    displayName: Publish APK
